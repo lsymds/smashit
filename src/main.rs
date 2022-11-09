@@ -16,6 +16,7 @@ fn main() {
     }
 }
 
+/// Parses the given arguments into a struct that contains all of the options available.
 fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
     let mut path = String::from("");
     let mut method = String::from("GET");
@@ -40,6 +41,8 @@ fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
     });
 }
 
+/// Given a current position and a vector of arguments, return the current position + 1 argument if it exists and it is
+/// not empty.
 fn get_next_argument(current_position: &mut usize, args: &Vec<String>) -> Option<String> {
     if args.len() - 1 < *current_position + 1 || args[*current_position + 1].is_empty() {
         None
@@ -49,6 +52,7 @@ fn get_next_argument(current_position: &mut usize, args: &Vec<String>) -> Option
     }
 }
 
+/// Shows the multi-line CLI help documentation for smashit.
 fn show_help() {
     println!(
         "
@@ -63,6 +67,7 @@ options:
     );
 }
 
+/// Represents all available and defineable CLI arguments.
 struct ParsedArgs {
     url: String,
     method: String,
