@@ -52,7 +52,7 @@ fn get_next_argument(current_position: &mut usize, args: &Vec<String>) -> Option
 fn show_help() {
     println!(
         "
-smashit - simple single machine load testing tool built to learn Rust
+smashit - a simple, single machine, CLI-based HTTP load testing tool built whilst learning rust
 
 usage: smashit [options]
 
