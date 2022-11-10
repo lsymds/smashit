@@ -1,5 +1,4 @@
 use std::{
-    error::Error,
     ops::Add,
     time::{Duration, Instant},
 };
@@ -27,7 +26,7 @@ fn main() {
         println!("\tCount: {0}\n", parsed_args.count);
 
         match perform_request(&client, &parsed_args) {
-            RequestStastics::Success(response) => {
+            RequestStatistics::Success(response) => {
                 println!("😀 Request succeeded");
                 println!("\tStatus Code: {0}", response.status_code.to_string());
                 println!("\tResponse Size: {0}", response.response_size);
@@ -37,7 +36,12 @@ fn main() {
                     response.total_response_duration.as_millis()
                 );
             }
-            _ => println!("💀 Request failed"),
+            RequestStatistics::Failure(response) => {
+                println!("💀 Request failed");
+                if response.status_code.is_some() {
+                    println!("\tStatus Code: {0}", response.status_code.unwrap());
+                }
+            }
         }
     } else {
         show_help();
@@ -114,10 +118,12 @@ struct SuccessfulRequestStatistics {
 
 /// SuccessfulRequestStatistics represents timings, status codes and more pulled out from a failed request response.
 struct UnsuccessfulRequestStatistics {
-    status_code: StatusCode,
+    status_code: Option<StatusCode>,
 }
 
-enum RequestStastics {
+/// RequestStatistics represents the outcomes from a given request (either success or failure, each of which have their
+/// own values).
+enum RequestStatistics {
     Success(SuccessfulRequestStatistics),
     Failure(UnsuccessfulRequestStatistics),
 }
@@ -126,15 +132,38 @@ enum RequestStastics {
 fn perform_request(
     client: &reqwest::blocking::Client,
     parsed_args: &ParsedArgs,
-) -> RequestStastics {
+) -> RequestStatistics {
     let before_request = Instant::now();
-    let result = client.get(&parsed_args.url).send()?;
+
+    let result = match client.get(&parsed_args.url).send() {
+        Ok(r) => r,
+        _ => {
+            return RequestStatistics::Failure(UnsuccessfulRequestStatistics { status_code: None })
+        }
+    };
+
+    if !result.status().is_success() {
+        return RequestStatistics::Failure(UnsuccessfulRequestStatistics {
+            status_code: Some(result.status()),
+        });
+    }
+
     let latency = before_request.elapsed();
+
     let status = result.status();
-    let response_size = result.bytes()?.len();
+
+    let response_size = match result.bytes() {
+        Ok(bytes) => bytes.len(),
+        _ => {
+            return RequestStatistics::Failure(UnsuccessfulRequestStatistics {
+                status_code: Some(status),
+            })
+        }
+    };
+
     let total_response_duration = before_request.elapsed();
 
-    return Ok::<SuccessfulRequestStatistics, reqwest::Error>(SuccessfulRequestStatistics {
+    return RequestStatistics::Success(SuccessfulRequestStatistics {
         status_code: status,
         response_size: response_size,
         latency: latency,
