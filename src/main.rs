@@ -1,10 +1,13 @@
 use std::{
+    collections::HashMap,
     ops::Add,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use reqwest::StatusCode;
+use histogram::Histogram;
+use itertools::Itertools;
+use reqwest::{Request, StatusCode};
 
 #[tokio::main]
 async fn main() {
@@ -31,33 +34,14 @@ async fn main() {
             requests.push(tokio::spawn(async move { perform_request(c, a).await }));
         }
 
-        let results: Vec<RequestStatistics> = futures::future::join_all(requests)
-            .await
-            .into_iter()
-            .map(|r| r.unwrap())
-            .collect();
+        let results: Vec<Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics>> =
+            futures::future::join_all(requests)
+                .await
+                .into_iter()
+                .map(|r| r.unwrap())
+                .collect();
 
-        let successful_results: Vec<&RequestStatistics> = results
-            .iter()
-            .filter(|r| match r {
-                RequestStatistics::Success(_) => true,
-                _ => false,
-            })
-            .collect();
-
-        let failed_results: Vec<&RequestStatistics> = results
-            .iter()
-            .filter(|r| match r {
-                RequestStatistics::Failure(_) => true,
-                _ => false,
-            })
-            .collect();
-
-        println!(
-            "{0} successful requests, {1} failed requests.",
-            successful_results.len(),
-            failed_results.len()
-        )
+        print_results(results)
     } else {
         show_help();
     }
@@ -124,67 +108,178 @@ struct ParsedArgs {
 }
 
 /// SuccessfulRequestStatistics represents timings, status codes and more pulled out from a successful request response.
-#[derive(Clone)]
-struct SuccessfulRequestStatistics {
+#[derive(Debug)]
+struct SuccessfulResponseStatistics {
     status_code: StatusCode,
-    response_size: usize,
-    latency: Duration,
-    total_response_duration: Duration,
+    response_time: Duration,
 }
 
 /// SuccessfulRequestStatistics represents timings, status codes and more pulled out from a failed request response.
-#[derive(Clone)]
-struct UnsuccessfulRequestStatistics {
+#[derive(Debug)]
+struct UnsuccessfulResponseStatistics {
     status_code: Option<StatusCode>,
-}
-
-/// RequestStatistics represents the outcomes from a given request (either success or failure, each of which have their
-/// own values).
-#[derive(Clone)]
-enum RequestStatistics {
-    Success(SuccessfulRequestStatistics),
-    Failure(UnsuccessfulRequestStatistics),
 }
 
 /// perform_request performs the request for a given set of arguments parsed from the command line.
 async fn perform_request(
     client: Arc<reqwest::Client>,
     parsed_args: Arc<ParsedArgs>,
-) -> RequestStatistics {
+) -> Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics> {
     let before_request = Instant::now();
 
     let result = match client.get(&parsed_args.url).send().await {
         Ok(r) => r,
-        _ => {
-            return RequestStatistics::Failure(UnsuccessfulRequestStatistics { status_code: None })
-        }
+        _ => return Err(UnsuccessfulResponseStatistics { status_code: None }),
     };
 
     if !result.status().is_success() {
-        return RequestStatistics::Failure(UnsuccessfulRequestStatistics {
+        return Err(UnsuccessfulResponseStatistics {
             status_code: Some(result.status()),
         });
     }
 
-    let latency = before_request.elapsed();
-
     let status = result.status();
 
-    let response_size = match result.bytes().await {
+    match result.bytes().await {
         Ok(bytes) => bytes.len(),
         _ => {
-            return RequestStatistics::Failure(UnsuccessfulRequestStatistics {
+            return Err(UnsuccessfulResponseStatistics {
                 status_code: Some(status),
             })
         }
     };
 
-    let total_response_duration = before_request.elapsed();
+    let response_time = before_request.elapsed();
 
-    return RequestStatistics::Success(SuccessfulRequestStatistics {
+    return Ok(SuccessfulResponseStatistics {
         status_code: status,
-        response_size: response_size,
-        latency: latency,
-        total_response_duration,
+        response_time,
     });
+}
+
+// Generates and prints collated results from the collected request statistics.
+fn print_results(
+    results: Vec<Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics>>,
+) {
+    let successful_results: Vec<&SuccessfulResponseStatistics> = results
+        .iter()
+        .filter(|r| r.is_ok())
+        .map(|r| r.as_ref().unwrap())
+        .collect();
+
+    let failed_results: Vec<&UnsuccessfulResponseStatistics> = results
+        .iter()
+        .filter(|r| r.is_err())
+        .map(|r| r.as_ref().unwrap_err())
+        .collect();
+
+    println!("🎉 Result summary");
+
+    // Print the summary counts.
+    println!(
+        "\t{0} successful requests, {1} failed requests.\n",
+        successful_results.len(),
+        failed_results.len()
+    );
+
+    // Print the response code numbers.
+    println!("\t{0: <12} | {1: <12}", "Status Code", "Count");
+    for (key, value) in get_ordered_status_code_counts_from_results(&results) {
+        println!(
+            "\t{0: <12} | {1: <12}",
+            key.map_or_else(|| String::from("None"), |f| String::from(f.as_str())),
+            value,
+        );
+    }
+    println!("");
+
+    println!(
+        "\t{0: <6} | {1: <6} | {2: <6} | {3: <6} | {4: <6} | {5: <6} | {6: <6}",
+        "Min", "Avg", "Max", "50th", "75th", "90th", "99th"
+    );
+
+    let timings = get_timings_from_successful_results(&successful_results);
+    println!(
+        "\t{0: <6} | {1: <6} | {2: <6} | {3: <6} | {4: <6} | {5: <6} | {6: <6}",
+        format!("{}ms", timings.0.as_millis()),
+        format!("{}ms", timings.1.as_millis()),
+        format!("{}ms", timings.2.as_millis()),
+        format!("{}ms", timings.3.as_millis()),
+        format!("{}ms", timings.4.as_millis()),
+        format!("{}ms", timings.5.as_millis()),
+        format!("{}ms", timings.6.as_millis()),
+    );
+}
+
+fn get_timings_from_successful_results(
+    successful_results: &Vec<&SuccessfulResponseStatistics>,
+) -> (
+    Duration,
+    Duration,
+    Duration,
+    Duration,
+    Duration,
+    Duration,
+    Duration,
+) {
+    let mut min = Duration::MAX;
+    let mut max = Duration::ZERO;
+
+    // average
+    let mut count = 0;
+    let mut total = Duration::ZERO;
+
+    // percentiles
+    let mut histogram = Histogram::new();
+
+    for result in successful_results {
+        if result.response_time < min {
+            min = result.response_time
+        }
+
+        if result.response_time > max {
+            max = result.response_time
+        }
+
+        count = count + 1;
+        total = total + result.response_time;
+        histogram
+            .increment(result.response_time.as_millis() as u64)
+            .unwrap();
+    }
+
+    (
+        min,
+        (total / count),
+        max,
+        Duration::from_millis(histogram.percentile(50.0).unwrap()),
+        Duration::from_millis(histogram.percentile(75.0).unwrap()),
+        Duration::from_millis(histogram.percentile(90.0).unwrap()),
+        Duration::from_millis(histogram.percentile(99.0).unwrap()),
+    )
+}
+
+/// From a vector of response statistics generate an ordered hashmap grouping of the status codes in the response and
+/// their counts.
+fn get_ordered_status_code_counts_from_results(
+    results: &Vec<Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics>>,
+) -> HashMap<Option<StatusCode>, usize> {
+    let mut response: HashMap<Option<StatusCode>, usize> = HashMap::new();
+
+    for result in results {
+        let status = match result {
+            Ok(r) => Some(r.status_code),
+            Err(e) => e.status_code,
+        };
+        if response.contains_key(&status) {
+            *response.get_mut(&status).unwrap() += 1;
+        } else {
+            response.insert(status, 1);
+        }
+    }
+
+    return response
+        .into_iter()
+        .sorted_by(|a, b| a.1.cmp(&b.1))
+        .collect();
 }
