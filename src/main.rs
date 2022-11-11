@@ -16,6 +16,17 @@ struct ParsedArgs {
     count: i32,
 }
 
+/// Represents different timing bounds calculated from all of the results.
+struct ResponsesTimings {
+    min: Duration,
+    avg: Duration,
+    max: Duration,
+    fiftieth_percentile: Duration,
+    seventy_fifth_percentile: Duration,
+    ninetieth_percentile: Duration,
+    ninety_ninth_percentile: Duration,
+}
+
 #[tokio::main]
 async fn main() {
     if let Some(parsed_args) = parse_args(std::env::args().collect()) {
@@ -206,28 +217,18 @@ fn print_timings(results: &Vec<ResponseStatistics>) {
     let timings = get_timings_from_results(&results);
     println!(
         "\t{0: <6} | {1: <6} | {2: <6} | {3: <6} | {4: <6} | {5: <6} | {6: <6}",
-        format!("{}ms", timings.0.as_millis()),
-        format!("{}ms", timings.1.as_millis()),
-        format!("{}ms", timings.2.as_millis()),
-        format!("{}ms", timings.3.as_millis()),
-        format!("{}ms", timings.4.as_millis()),
-        format!("{}ms", timings.5.as_millis()),
-        format!("{}ms", timings.6.as_millis()),
+        format!("{}ms", timings.min.as_millis()),
+        format!("{}ms", timings.avg.as_millis()),
+        format!("{}ms", timings.max.as_millis()),
+        format!("{}ms", timings.fiftieth_percentile.as_millis()),
+        format!("{}ms", timings.seventy_fifth_percentile.as_millis()),
+        format!("{}ms", timings.ninetieth_percentile.as_millis()),
+        format!("{}ms", timings.ninety_ninth_percentile.as_millis()),
     );
 }
 
 // Gets the minimum, average, maximum and percentile based timings from the results.
-fn get_timings_from_results(
-    results: &Vec<ResponseStatistics>,
-) -> (
-    Duration,
-    Duration,
-    Duration,
-    Duration,
-    Duration,
-    Duration,
-    Duration,
-) {
+fn get_timings_from_results(results: &Vec<ResponseStatistics>) -> ResponsesTimings {
     let mut min = Duration::MAX;
     let mut max = Duration::ZERO;
 
@@ -259,19 +260,19 @@ fn get_timings_from_results(
             .unwrap()
     }
 
-    (
+    ResponsesTimings {
         min,
-        if count > 0 {
+        avg: if count > 0 {
             total / count
         } else {
             Duration::ZERO
         },
         max,
-        Duration::from_millis(histogram.percentile(50.0).unwrap()),
-        Duration::from_millis(histogram.percentile(75.0).unwrap()),
-        Duration::from_millis(histogram.percentile(90.0).unwrap()),
-        Duration::from_millis(histogram.percentile(99.0).unwrap()),
-    )
+        fiftieth_percentile: Duration::from_millis(histogram.percentile(50.0).unwrap()),
+        seventy_fifth_percentile: Duration::from_millis(histogram.percentile(75.0).unwrap()),
+        ninetieth_percentile: Duration::from_millis(histogram.percentile(90.0).unwrap()),
+        ninety_ninth_percentile: Duration::from_millis(histogram.percentile(99.0).unwrap()),
+    }
 }
 
 /// From a vector of response statistics generate an ordered hashmap grouping of the status codes in the response and
