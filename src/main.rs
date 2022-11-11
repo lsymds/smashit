@@ -9,6 +9,13 @@ use histogram::Histogram;
 use itertools::Itertools;
 use reqwest::StatusCode;
 
+/// Represents all available and defineable CLI arguments.
+struct ParsedArgs {
+    url: String,
+    method: String,
+    count: i32,
+}
+
 #[tokio::main]
 async fn main() {
     if let Some(parsed_args) = parse_args(std::env::args().collect()) {
@@ -22,10 +29,7 @@ async fn main() {
         let client = Arc::new(reqwest::Client::new());
         let args = Arc::new(parsed_args);
 
-        println!("🪄 Request summary");
-        println!("\tURL: {0}", args.url);
-        println!("\tMethod: {0}", args.method);
-        println!("\tCount: {0}\n", args.count);
+        print_request_summary(&args);
 
         let mut requests = vec![];
         for _ in 0..args.count {
@@ -99,13 +103,6 @@ options:
     );
 }
 
-/// Represents all available and defineable CLI arguments.
-struct ParsedArgs {
-    url: String,
-    method: String,
-    count: i32,
-}
-
 /// ResponseStatistics represents timings, status codes and more pulled out from a request's response.
 #[derive(Debug)]
 struct ResponseStatistics {
@@ -160,18 +157,35 @@ async fn perform_request(
     };
 }
 
-// Generates and prints collated results from the collected request statistics.
-fn print_results(results: Vec<ResponseStatistics>) {
-    println!("🎉 Result summary");
+/// Prints a summary of the CLI arguments used.
+fn print_request_summary(args: &ParsedArgs) {
+    println!("🪄 Request summary");
+    println!("\tURL: {0}", args.url);
+    println!("\tMethod: {0}", args.method);
+    println!("\tCount: {0}\n", args.count);
+}
 
-    // Print the summary counts.
+/// Generates and prints collated results from the collected request statistics.
+fn print_results(results: Vec<ResponseStatistics>) {
+    println!("\n🎉 Result summary");
+    print_summaries(&results);
+    println!("");
+    print_status_code_counts(&results);
+    println!("");
+    print_timings(&results);
+}
+
+/// Prints a summary of the requests and their response outcomes.
+fn print_summaries(results: &Vec<ResponseStatistics>) {
     println!(
-        "\t{0} successful requests, {1} failed requests.\n",
+        "\t{0} successful requests, {1} failed requests.",
         results.iter().filter(|r| r.is_success).count(),
         results.iter().filter(|r| !r.is_success).count(),
     );
+}
 
-    // Print the response code numbers.
+/// Prints a table of the returned status codes and the number of times they occurred.
+fn print_status_code_counts(results: &Vec<ResponseStatistics>) {
     println!("\t{0: <12} | {1: <12}", "Status Code", "Count");
     for (key, value) in get_ordered_status_code_counts_from_results(&results) {
         println!(
@@ -180,8 +194,10 @@ fn print_results(results: Vec<ResponseStatistics>) {
             value,
         );
     }
-    println!("");
+}
 
+/// Prints a table of the timings of the responses.
+fn print_timings(results: &Vec<ResponseStatistics>) {
     println!(
         "\t{0: <6} | {1: <6} | {2: <6} | {3: <6} | {4: <6} | {5: <6} | {6: <6}",
         "Min", "Avg", "Max", "50th", "75th", "90th", "99th"
