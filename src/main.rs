@@ -73,7 +73,10 @@ fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
             "-u" | "--url" => path = get_next_argument(&mut iterator, &args)?,
             "-m" | "--method" => method = get_next_argument(&mut iterator, &args)?,
             "-c" | "--count" => {
-                count = get_next_argument(&mut iterator, &args).and_then(|s| s.parse().ok())?
+                count = get_next_argument(&mut iterator, &args).and_then(|s| s.parse().ok())?;
+                if count <= 0 {
+                    return None;
+                }
             }
             _ => return None,
         }
