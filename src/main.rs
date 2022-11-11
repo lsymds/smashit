@@ -1,11 +1,13 @@
 use std::{
     ops::Add,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use reqwest::StatusCode;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     if let Some(parsed_args) = parse_args(std::env::args().collect()) {
         if parsed_args.url.is_empty() {
             show_help();
@@ -14,35 +16,48 @@ fn main() {
 
         println!("\nsmashit - a simple, single machine, CLI-based HTTP load testing tool built whilst learning rust\n");
 
-        let client = reqwest::blocking::Client::new();
-
-        // Asynchronously distribute all requests.
-        // Collate the responses.
-        // Return the summary of all responses, including the number of those that failed and their response code.
+        let client = Arc::new(reqwest::Client::new());
+        let args = Arc::new(parsed_args);
 
         println!("🪄 Request summary");
-        println!("\tURL: {0}", parsed_args.url);
-        println!("\tMethod: {0}", parsed_args.method);
-        println!("\tCount: {0}\n", parsed_args.count);
+        println!("\tURL: {0}", args.url);
+        println!("\tMethod: {0}", args.method);
+        println!("\tCount: {0}\n", args.count);
 
-        match perform_request(&client, &parsed_args) {
-            RequestStatistics::Success(response) => {
-                println!("😀 Request succeeded");
-                println!("\tStatus Code: {0}", response.status_code.to_string());
-                println!("\tResponse Size: {0}", response.response_size);
-                println!("\tLatency: {0}ms", response.latency.as_millis());
-                println!(
-                    "\tResponse Time: {0}ms",
-                    response.total_response_duration.as_millis()
-                );
-            }
-            RequestStatistics::Failure(response) => {
-                println!("💀 Request failed");
-                if response.status_code.is_some() {
-                    println!("\tStatus Code: {0}", response.status_code.unwrap());
-                }
-            }
+        let mut requests = vec![];
+        for _ in 0..args.count {
+            let c = client.clone();
+            let a = args.clone();
+            requests.push(tokio::spawn(async move { perform_request(c, a).await }));
         }
+
+        let results: Vec<RequestStatistics> = futures::future::join_all(requests)
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .collect();
+
+        let successful_results: Vec<&RequestStatistics> = results
+            .iter()
+            .filter(|r| match r {
+                RequestStatistics::Success(_) => true,
+                _ => false,
+            })
+            .collect();
+
+        let failed_results: Vec<&RequestStatistics> = results
+            .iter()
+            .filter(|r| match r {
+                RequestStatistics::Failure(_) => true,
+                _ => false,
+            })
+            .collect();
+
+        println!(
+            "{0} successful requests, {1} failed requests.",
+            successful_results.len(),
+            failed_results.len()
+        )
     } else {
         show_help();
     }
@@ -109,6 +124,7 @@ struct ParsedArgs {
 }
 
 /// SuccessfulRequestStatistics represents timings, status codes and more pulled out from a successful request response.
+#[derive(Clone)]
 struct SuccessfulRequestStatistics {
     status_code: StatusCode,
     response_size: usize,
@@ -117,25 +133,27 @@ struct SuccessfulRequestStatistics {
 }
 
 /// SuccessfulRequestStatistics represents timings, status codes and more pulled out from a failed request response.
+#[derive(Clone)]
 struct UnsuccessfulRequestStatistics {
     status_code: Option<StatusCode>,
 }
 
 /// RequestStatistics represents the outcomes from a given request (either success or failure, each of which have their
 /// own values).
+#[derive(Clone)]
 enum RequestStatistics {
     Success(SuccessfulRequestStatistics),
     Failure(UnsuccessfulRequestStatistics),
 }
 
 /// perform_request performs the request for a given set of arguments parsed from the command line.
-fn perform_request(
-    client: &reqwest::blocking::Client,
-    parsed_args: &ParsedArgs,
+async fn perform_request(
+    client: Arc<reqwest::Client>,
+    parsed_args: Arc<ParsedArgs>,
 ) -> RequestStatistics {
     let before_request = Instant::now();
 
-    let result = match client.get(&parsed_args.url).send() {
+    let result = match client.get(&parsed_args.url).send().await {
         Ok(r) => r,
         _ => {
             return RequestStatistics::Failure(UnsuccessfulRequestStatistics { status_code: None })
@@ -152,7 +170,7 @@ fn perform_request(
 
     let status = result.status();
 
-    let response_size = match result.bytes() {
+    let response_size = match result.bytes().await {
         Ok(bytes) => bytes.len(),
         _ => {
             return RequestStatistics::Failure(UnsuccessfulRequestStatistics {
