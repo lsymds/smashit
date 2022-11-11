@@ -162,19 +162,13 @@ async fn perform_request(
 
 // Generates and prints collated results from the collected request statistics.
 fn print_results(results: Vec<ResponseStatistics>) {
-    let successful_results: Vec<&ResponseStatistics> =
-        results.iter().filter(|r| r.is_success).collect();
-
-    let failed_results: Vec<&ResponseStatistics> =
-        results.iter().filter(|r| !r.is_success).collect();
-
     println!("🎉 Result summary");
 
     // Print the summary counts.
     println!(
         "\t{0} successful requests, {1} failed requests.\n",
-        successful_results.len(),
-        failed_results.len()
+        results.iter().filter(|r| r.is_success).count(),
+        results.iter().filter(|r| !r.is_success).count(),
     );
 
     // Print the response code numbers.
@@ -193,7 +187,7 @@ fn print_results(results: Vec<ResponseStatistics>) {
         "Min", "Avg", "Max", "50th", "75th", "90th", "99th"
     );
 
-    let timings = get_timings_from_successful_results(&successful_results);
+    let timings = get_timings_from_results(&results);
     println!(
         "\t{0: <6} | {1: <6} | {2: <6} | {3: <6} | {4: <6} | {5: <6} | {6: <6}",
         format!("{}ms", timings.0.as_millis()),
@@ -207,8 +201,8 @@ fn print_results(results: Vec<ResponseStatistics>) {
 }
 
 // Gets the minimum, average, maximum and percentile based timings from the results.
-fn get_timings_from_successful_results(
-    results: &Vec<&ResponseStatistics>,
+fn get_timings_from_results(
+    results: &Vec<ResponseStatistics>,
 ) -> (
     Duration,
     Duration,
@@ -231,7 +225,7 @@ fn get_timings_from_successful_results(
     for result in results {
         let response_time = match result.response_time {
             Some(r) => r,
-            None => Duration::ZERO,
+            None => continue,
         };
 
         if response_time < min {
