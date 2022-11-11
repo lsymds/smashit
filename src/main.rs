@@ -189,7 +189,7 @@ fn print_results(results: Vec<ResponseStatistics>) {
 /// Prints a summary of the requests and their response outcomes.
 fn print_summaries(results: &Vec<ResponseStatistics>) {
     println!(
-        "\t{0} successful requests, {1} failed requests.",
+        "\t{0} successful, {1} failed.",
         results.iter().filter(|r| r.is_success).count(),
         results.iter().filter(|r| !r.is_success).count(),
     );
