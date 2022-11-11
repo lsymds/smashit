@@ -7,7 +7,7 @@ use std::{
 
 use histogram::Histogram;
 use itertools::Itertools;
-use reqwest::{Request, StatusCode};
+use reqwest::StatusCode;
 
 #[tokio::main]
 async fn main() {
@@ -34,12 +34,11 @@ async fn main() {
             requests.push(tokio::spawn(async move { perform_request(c, a).await }));
         }
 
-        let results: Vec<Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics>> =
-            futures::future::join_all(requests)
-                .await
-                .into_iter()
-                .map(|r| r.unwrap())
-                .collect();
+        let results: Vec<ResponseStatistics> = futures::future::join_all(requests)
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .collect();
 
         print_results(results)
     } else {
@@ -107,35 +106,38 @@ struct ParsedArgs {
     count: i32,
 }
 
-/// SuccessfulRequestStatistics represents timings, status codes and more pulled out from a successful request response.
+/// ResponseStatistics represents timings, status codes and more pulled out from a request's response.
 #[derive(Debug)]
-struct SuccessfulResponseStatistics {
-    status_code: StatusCode,
-    response_time: Duration,
-}
-
-/// SuccessfulRequestStatistics represents timings, status codes and more pulled out from a failed request response.
-#[derive(Debug)]
-struct UnsuccessfulResponseStatistics {
+struct ResponseStatistics {
+    is_success: bool,
     status_code: Option<StatusCode>,
+    response_time: Option<Duration>,
 }
 
-/// perform_request performs the request for a given set of arguments parsed from the command line.
+/// Performs the request for a given set of arguments parsed from the command line.
 async fn perform_request(
     client: Arc<reqwest::Client>,
     parsed_args: Arc<ParsedArgs>,
-) -> Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics> {
+) -> ResponseStatistics {
     let before_request = Instant::now();
 
     let result = match client.get(&parsed_args.url).send().await {
         Ok(r) => r,
-        _ => return Err(UnsuccessfulResponseStatistics { status_code: None }),
+        _ => {
+            return ResponseStatistics {
+                is_success: false,
+                status_code: None,
+                response_time: None,
+            }
+        }
     };
 
     if !result.status().is_success() {
-        return Err(UnsuccessfulResponseStatistics {
+        return ResponseStatistics {
+            is_success: false,
             status_code: Some(result.status()),
-        });
+            response_time: Some(before_request.elapsed()),
+        };
     }
 
     let status = result.status();
@@ -143,35 +145,28 @@ async fn perform_request(
     match result.bytes().await {
         Ok(bytes) => bytes.len(),
         _ => {
-            return Err(UnsuccessfulResponseStatistics {
+            return ResponseStatistics {
+                is_success: false,
                 status_code: Some(status),
-            })
+                response_time: Some(before_request.elapsed()),
+            }
         }
     };
 
-    let response_time = before_request.elapsed();
-
-    return Ok(SuccessfulResponseStatistics {
-        status_code: status,
-        response_time,
-    });
+    return ResponseStatistics {
+        is_success: true,
+        status_code: Some(status),
+        response_time: Some(before_request.elapsed()),
+    };
 }
 
 // Generates and prints collated results from the collected request statistics.
-fn print_results(
-    results: Vec<Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics>>,
-) {
-    let successful_results: Vec<&SuccessfulResponseStatistics> = results
-        .iter()
-        .filter(|r| r.is_ok())
-        .map(|r| r.as_ref().unwrap())
-        .collect();
+fn print_results(results: Vec<ResponseStatistics>) {
+    let successful_results: Vec<&ResponseStatistics> =
+        results.iter().filter(|r| r.is_success).collect();
 
-    let failed_results: Vec<&UnsuccessfulResponseStatistics> = results
-        .iter()
-        .filter(|r| r.is_err())
-        .map(|r| r.as_ref().unwrap_err())
-        .collect();
+    let failed_results: Vec<&ResponseStatistics> =
+        results.iter().filter(|r| !r.is_success).collect();
 
     println!("🎉 Result summary");
 
@@ -211,8 +206,9 @@ fn print_results(
     );
 }
 
+// Gets the minimum, average, maximum and percentile based timings from the results.
 fn get_timings_from_successful_results(
-    successful_results: &Vec<&SuccessfulResponseStatistics>,
+    results: &Vec<&ResponseStatistics>,
 ) -> (
     Duration,
     Duration,
@@ -232,25 +228,34 @@ fn get_timings_from_successful_results(
     // percentiles
     let mut histogram = Histogram::new();
 
-    for result in successful_results {
-        if result.response_time < min {
-            min = result.response_time
+    for result in results {
+        let response_time = match result.response_time {
+            Some(r) => r,
+            None => Duration::ZERO,
+        };
+
+        if response_time < min {
+            min = response_time
         }
 
-        if result.response_time > max {
-            max = result.response_time
+        if response_time > max {
+            max = response_time
         }
 
         count = count + 1;
-        total = total + result.response_time;
+        total = total + response_time;
         histogram
-            .increment(result.response_time.as_millis() as u64)
-            .unwrap();
+            .increment(response_time.as_millis() as u64)
+            .unwrap()
     }
 
     (
         min,
-        (total / count),
+        if count > 0 {
+            total / count
+        } else {
+            Duration::ZERO
+        },
         max,
         Duration::from_millis(histogram.percentile(50.0).unwrap()),
         Duration::from_millis(histogram.percentile(75.0).unwrap()),
@@ -262,19 +267,15 @@ fn get_timings_from_successful_results(
 /// From a vector of response statistics generate an ordered hashmap grouping of the status codes in the response and
 /// their counts.
 fn get_ordered_status_code_counts_from_results(
-    results: &Vec<Result<SuccessfulResponseStatistics, UnsuccessfulResponseStatistics>>,
+    results: &Vec<ResponseStatistics>,
 ) -> HashMap<Option<StatusCode>, usize> {
     let mut response: HashMap<Option<StatusCode>, usize> = HashMap::new();
 
     for result in results {
-        let status = match result {
-            Ok(r) => Some(r.status_code),
-            Err(e) => e.status_code,
-        };
-        if response.contains_key(&status) {
-            *response.get_mut(&status).unwrap() += 1;
+        if response.contains_key(&result.status_code) {
+            *response.get_mut(&result.status_code).unwrap() += 1;
         } else {
-            response.insert(status, 1);
+            response.insert(result.status_code, 1);
         }
     }
 
