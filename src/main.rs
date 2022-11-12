@@ -27,6 +27,14 @@ struct ResponsesTimings {
     ninety_ninth_percentile: Duration,
 }
 
+/// ResponseStatistics represents timings, status codes and more pulled out from a request's response.
+#[derive(Debug)]
+struct ResponseStatistics {
+    is_success: bool,
+    status_code: Option<StatusCode>,
+    response_time: Option<Duration>,
+}
+
 #[tokio::main]
 async fn main() {
     if let Some(parsed_args) = parse_args(std::env::args().collect()) {
@@ -115,14 +123,6 @@ options:
   -u | --url    The URL to load test
   -m | --method The HTTP method to use in the request (default: GET)"
     );
-}
-
-/// ResponseStatistics represents timings, status codes and more pulled out from a request's response.
-#[derive(Debug)]
-struct ResponseStatistics {
-    is_success: bool,
-    status_code: Option<StatusCode>,
-    response_time: Option<Duration>,
 }
 
 /// Performs the request for a given set of arguments parsed from the command line.
