@@ -7,13 +7,14 @@ use std::{
 
 use histogram::Histogram;
 use itertools::Itertools;
-use reqwest::StatusCode;
+use reqwest::{Method, StatusCode};
 
 /// Represents all available and defineable CLI arguments.
 struct ParsedArgs {
     url: String,
-    method: String,
+    method: Method,
     count: i32,
+    headers: HashMap<String, String>,
 }
 
 /// Represents different timing bounds calculated from all of the results.
@@ -72,19 +73,43 @@ async fn main() {
 /// Parses the given arguments into a struct that contains all of the options available.
 fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
     let mut path = String::from("");
-    let mut method = String::from("GET");
+    let mut method = Method::GET;
     let mut count = 1;
+    let mut headers: HashMap<String, String> = HashMap::new();
 
     let mut iterator = 1;
     while iterator < args.len() {
         match args[iterator].as_str() {
             "-u" | "--url" => path = get_next_argument(&mut iterator, &args)?,
-            "-m" | "--method" => method = get_next_argument(&mut iterator, &args)?,
+            "-m" | "--method" => {
+                method =
+                    match Method::from_bytes(get_next_argument(&mut iterator, &args)?.as_bytes()) {
+                        Ok(r) => r,
+                        Err(_) => return None,
+                    }
+            }
             "-c" | "--count" => {
                 count = get_next_argument(&mut iterator, &args).and_then(|s| s.parse().ok())?;
                 if count <= 0 {
                     return None;
                 }
+            }
+            "-h" | "--header" => {
+                let kvp = get_next_argument(&mut iterator, &args)?;
+
+                // If it's not a key value pair.
+                if !kvp.contains("=") {
+                    return None;
+                }
+
+                let kvp_split: Vec<&str> = kvp.split("=").collect_vec();
+
+                // If it's a badly formatted key value pair.
+                if kvp_split.len() != 2 {
+                    return None;
+                }
+
+                headers.insert(kvp_split[0].to_owned(), kvp_split[1].to_owned());
             }
             _ => return None,
         }
@@ -94,6 +119,7 @@ fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
         url: path,
         method: method,
         count,
+        headers,
     });
 }
 
@@ -116,12 +142,13 @@ smashit - a simple, single machine, CLI-based HTTP load testing tool built whils
 
 usage: smashit [options]
 
-example: smashit -u https://my-api.com/users -c 25
+example: smashit -u https://my-api.com/users -c 25 -h \"Authorization=Bearer Foo\"
 
 options:
   -c | --count  The number of times to call the endpoint (default: 1)
   -u | --url    The URL to load test
-  -m | --method The HTTP method to use in the request (default: GET)"
+  -m | --method The HTTP method to use in the request (default: GET)
+  -h | --header A header key value pair specified in the format of KEY=VALUE to be sent in the request"
     );
 }
 
@@ -132,7 +159,13 @@ async fn perform_request(
 ) -> ResponseStatistics {
     let before_request = Instant::now();
 
-    let result = match client.get(&parsed_args.url).send().await {
+    let mut request = client.request(parsed_args.method.clone(), parsed_args.url.clone());
+
+    for (header, value) in &parsed_args.headers {
+        request = request.header(header, value);
+    }
+
+    let result = match request.send().await {
         Ok(r) => r,
         _ => {
             return ResponseStatistics {
@@ -152,6 +185,8 @@ async fn perform_request(
     }
 
     let status = result.status();
+
+    // println!("{}", result.text().await.unwrap());
 
     match result.bytes().await {
         Ok(bytes) => bytes.len(),
