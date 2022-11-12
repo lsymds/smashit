@@ -20,7 +20,7 @@ options:
 ## Example
 
 ```bash
-~ cargo run -- -- -u https://postman-echo.com/get -m GET -c 100
+~ cargo run -- -u https://postman-echo.com/get -m GET -c 100
 
 smashit - a simple, single machine, CLI-based HTTP load testing tool built whilst learning rust
 
