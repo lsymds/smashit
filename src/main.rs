@@ -15,6 +15,7 @@ struct ParsedArgs {
     method: Method,
     count: i32,
     headers: HashMap<String, String>,
+    body: Option<String>,
 }
 
 /// Represents different timing bounds calculated from all of the results.
@@ -76,6 +77,7 @@ fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
     let mut method = Method::GET;
     let mut count = 1;
     let mut headers: HashMap<String, String> = HashMap::new();
+    let mut body: Option<String> = None;
 
     let mut iterator = 1;
     while iterator < args.len() {
@@ -111,6 +113,7 @@ fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
 
                 headers.insert(kvp_split[0].to_owned(), kvp_split[1].to_owned());
             }
+            "-b" | "--body" => body = Some(get_next_argument(&mut iterator, &args)?),
             _ => return None,
         }
     }
@@ -120,6 +123,7 @@ fn parse_args(args: Vec<String>) -> Option<ParsedArgs> {
         method: method,
         count,
         headers,
+        body,
     });
 }
 
@@ -165,6 +169,10 @@ async fn perform_request(
         request = request.header(header, value);
     }
 
+    if parsed_args.body.is_some() {
+        request = request.body(parsed_args.body.to_owned().unwrap());
+    }
+
     let result = match request.send().await {
         Ok(r) => r,
         _ => {
@@ -185,8 +193,6 @@ async fn perform_request(
     }
 
     let status = result.status();
-
-    // println!("{}", result.text().await.unwrap());
 
     match result.bytes().await {
         Ok(bytes) => bytes.len(),
